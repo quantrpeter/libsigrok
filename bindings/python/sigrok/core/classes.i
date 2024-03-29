@@ -623,4 +623,13 @@ std::map<std::string, Glib::VariantBase> dict_to_map_options(PyObject *dict,
 }
 }
 
+%extend sigrok::ChannelGroup
+{
+%pythoncode
+{
+    def __repr__(self):
+        return _class_attribute_repr(self, ['name', 'channels'])
+}
+}
+
 %include "doc_end.i"
