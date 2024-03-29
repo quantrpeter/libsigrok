@@ -614,4 +614,13 @@ std::map<std::string, Glib::VariantBase> dict_to_map_options(PyObject *dict,
     Context.create_logic_packet = _Context_create_logic_packet
 }
 
+%extend sigrok::Channel
+{
+%pythoncode
+{
+    def __repr__(self):
+        return _class_attribute_repr(self, ['type', 'name', 'index', 'enabled'])
+}
+}
+
 %include "doc_end.i"
