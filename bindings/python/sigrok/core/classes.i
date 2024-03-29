@@ -81,6 +81,15 @@ typedef guint pyg_flags_type;
 
 %include "../../../swig/templates.i"
 
+%pythoncode
+{
+    def _class_attribute_repr(obj, attributes):
+        attribute_str = ", ".join(
+            ["%s=%s" % (key, repr(obj.__getattribute__(key))) for key in attributes]
+        )
+        return "{:s} ({:s})".format(obj.__class__.__name__, attribute_str)
+}
+
 /* Map file objects to file descriptors. */
 %typecheck(SWIG_TYPECHECK_POINTER) int fd {
     $1 = (PyObject_AsFileDescriptor($input) != -1);
