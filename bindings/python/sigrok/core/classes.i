@@ -494,6 +494,12 @@ std::map<std::string, Glib::VariantBase> dict_to_map_options(PyObject *dict,
 
         return $self->scan(options);
     }
+
+%pythoncode
+{
+    def __repr__(self):
+        return _class_attribute_repr(self, ['name', 'long_name'])
+}
 }
 
 %pythoncode
