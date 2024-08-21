@@ -476,7 +476,7 @@ AS_IF([test "x$HAVE_DOXYGEN" != xyes],
 SR_SEARCH_LIBS([SR_EXTRA_CXX_LIBS], [__cxa_throw], [gnustl_shared])
 
 # Python is needed for the C++ bindings.
-AM_PATH_PYTHON([2.7],
+AM_PATH_PYTHON([3.8],
 	[HAVE_PYTHON=yes],
 	[HAVE_PYTHON=no
 	SR_APPEND([sr_cxx_missing], [', '], [Python])])
@@ -519,7 +519,7 @@ sr_pymajor=${PYTHON_VERSION%%.*}
 sr_pyminor=${PYTHON_VERSION#*.}
 
 # The Python bindings need Python development files. Check for either
-# Python 3 or Python 2 headers depending on the interpreter version.
+# Python 3 headers depending on the interpreter version.
 SR_PKG_CHECK([python_dev], [SR_PKGLIBS_PYTHON],
 	[python = $PYTHON_VERSION],
 	[python$sr_pymajor = $PYTHON_VERSION],
