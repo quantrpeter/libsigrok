@@ -777,6 +777,12 @@ src_libdrivers_la_SOURCES += \
 	src/hardware/zketech-ebd-usb/protocol.c \
 	src/hardware/zketech-ebd-usb/api.c
 endif
+if HW_QUANTR
+src_libdrivers_la_SOURCES += \
+    src/hardware/quantr/protocol.h \
+    src/hardware/quantr/protocol.c \
+    src/hardware/quantr/api.c
+endif
 
 libsigrok_la_LIBADD = src/libdrivers.lo $(SR_EXTRA_LIBS) $(LIBSIGROK_LIBS)
 libsigrok_la_LDFLAGS = -version-info $(SR_LIB_VERSION) -no-undefined
