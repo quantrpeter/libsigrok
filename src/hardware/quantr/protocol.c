@@ -40,7 +40,7 @@ SR_PRIV int quantr_cleanup(const struct sr_dev_driver *di)
 /* Scan for devices */
 SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
 {
-	printf("quantr_scan\n");
+	printf("quantr_scan 2\n");
     /* Allocate memory for the device list */
     GSList *devices = NULL;
     struct sr_dev_inst *sdi;
@@ -72,8 +72,31 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     }
  
     /* Try to communicate with the device to verify it's there */
-    /* You would typically send an identification command here */
-     
+    /* Send ping and expect pong */
+    printf("c\n");
+    const char *ping_cmd = "ping\n";
+    char pong_reply[16] = {0};
+    int write_ret = serial_write_blocking(serial, ping_cmd, strlen(ping_cmd), 1000);
+    if (write_ret < 0) {
+        printf("Failed to send ping to device.\n");
+        serial_close(serial);
+        sr_serial_dev_inst_free(serial);
+        return NULL;
+    }
+    int read_ret = serial_read_blocking(serial, pong_reply, sizeof(pong_reply)-1, 1000);
+    if (read_ret < 0) {
+        printf("Failed to read pong from device.\n");
+        serial_close(serial);
+        sr_serial_dev_inst_free(serial);
+        return NULL;
+    }
+    pong_reply[read_ret] = '\0';
+    if (strncmp(pong_reply, "pong", 4) != 0) {
+        printf("Device did not reply pong, got: '%s'\n", pong_reply);
+        serial_close(serial);
+        sr_serial_dev_inst_free(serial);
+        return NULL;
+    }
     /* Create device instance */
     sdi = g_malloc0(sizeof(struct sr_dev_inst));
     sdi->status = SR_ST_INACTIVE;
@@ -81,13 +104,14 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     sdi->model = g_strdup("Device");
     sdi->inst_type = SR_INST_SERIAL;
     sdi->conn = serial;
-     
+     printf("a\n");
     if (!sdi) {
         serial_close(serial);
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
  
+    printf("3\n");
     devc = g_malloc0(sizeof(struct dev_context));
     devc->serial = serial;
     devc->samplerate = 1000000; /* Default 1MHz */
@@ -98,6 +122,7 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
      
     serial_close(serial);
     devices = g_slist_append(devices, sdi);
+    printf("devices=%p\n", devices);
     return devices;
 }
  
