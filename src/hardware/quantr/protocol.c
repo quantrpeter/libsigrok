@@ -81,8 +81,9 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
  
     /* Try to communicate with the device to verify it's there */
     /* Send ping and expect pong */
-    const char *ping_cmd = "ping\n";
-    char pong_reply[16] = {0};
+    const char *ping_cmd = "import sys\r\nprint(sys.version)\r\n";
+    char pong_reply[128] = {0};
+	printf(" - strlen(ping_cmd)=%d\n", strlen(ping_cmd));
     int write_ret = serial_write_blocking(serial, ping_cmd, strlen(ping_cmd), 1000);
     if (write_ret < 0) {
         printf(" - failed to send ping to device.\n");
@@ -90,7 +91,9 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
+	printf(" - sizeof(pong_reply)-1=%d\n", sizeof(pong_reply)-1);
     int read_ret = serial_read_blocking(serial, pong_reply, sizeof(pong_reply)-1, 1000);
+	printf(" - read_ret = %d\n", read_ret);
     if (read_ret < 0) {
         printf(" - failed to read pong from device.\n");
         serial_close(serial);
