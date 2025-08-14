@@ -40,7 +40,7 @@ SR_PRIV int quantr_cleanup(const struct sr_dev_driver *di)
 /* Scan for devices */
 SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
 {
-	printf("quantr_scan 2\n");
+	printf("Scanning quantr device\n");
     /* Allocate memory for the device list */
     GSList *devices = NULL;
     struct sr_dev_inst *sdi;
@@ -60,43 +60,52 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
  
     if (!conn)
         return NULL;
+
+	printf(" - connecting to %s, %s\n", conn, serialcomm);
  
     /* Try to open the serial port */
     serial = sr_serial_dev_inst_new(conn, serialcomm);
-    if (!serial)
+    if (!serial){
+		printf(" - failed to open device %s by sr_serial_dev_inst_new\n", conn);
         return NULL;
+	}
  
-    if (serial_open(serial, SERIAL_RDWR) != SR_OK) {
+    int open_ret = serial_open(serial, SERIAL_RDWR);
+    if (open_ret != SR_OK) {
         sr_serial_dev_inst_free(serial);
+        printf(" - failed to open device %s (serial_open returned %d)\n", conn, open_ret);
+        // Optionally, print strerror if open_ret is errno
+        printf(" - strerror: %s\n", strerror(errno));
         return NULL;
     }
  
     /* Try to communicate with the device to verify it's there */
     /* Send ping and expect pong */
-    printf("c\n");
     const char *ping_cmd = "ping\n";
     char pong_reply[16] = {0};
     int write_ret = serial_write_blocking(serial, ping_cmd, strlen(ping_cmd), 1000);
     if (write_ret < 0) {
-        printf("Failed to send ping to device.\n");
+        printf(" - failed to send ping to device.\n");
         serial_close(serial);
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
     int read_ret = serial_read_blocking(serial, pong_reply, sizeof(pong_reply)-1, 1000);
     if (read_ret < 0) {
-        printf("Failed to read pong from device.\n");
+        printf(" - failed to read pong from device.\n");
         serial_close(serial);
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
     pong_reply[read_ret] = '\0';
     if (strncmp(pong_reply, "pong", 4) != 0) {
-        printf("Device did not reply pong, got: '%s'\n", pong_reply);
+        printf(" - device did not reply pong, got: '%s'\n", pong_reply);
         serial_close(serial);
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
+
+	printf("found device on %s\n", conn);
     /* Create device instance */
     sdi = g_malloc0(sizeof(struct sr_dev_inst));
     sdi->status = SR_ST_INACTIVE;
