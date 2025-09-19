@@ -15,6 +15,7 @@ static const uint32_t scanopts[] = {
 static const uint32_t devopts[] = {
     SR_CONF_LOGIC_ANALYZER,
     SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+    SR_CONF_CONTINUOUS | SR_CONF_GET | SR_CONF_SET,
 };
  
 static const uint64_t samplerates[] = {
@@ -23,6 +24,9 @@ static const uint64_t samplerates[] = {
     SR_KHZ(100),
     SR_MHZ(1),
     SR_MHZ(10),
+    SR_MHZ(20),
+    SR_MHZ(25),
+    SR_MHZ(50),
 };
  
 /* Initialize the driver */
@@ -34,6 +38,7 @@ SR_PRIV int quantr_init(struct sr_dev_driver *di, struct sr_context *sr_ctx)
 /* Cleanup resources */
 SR_PRIV int quantr_cleanup(const struct sr_dev_driver *di)
 {
+	printf("quantr_cleanup\n");
     return std_cleanup(di);
 }
  
@@ -53,7 +58,7 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
  
     /* Parse options */
     conn = NULL;
-    serialcomm = "115200/8n1"; /* Default serial settings */
+    serialcomm = "115200/8n1/dtr=1/rts=1"; /* Default serial settings with DTR/RTS asserted */
      
     if (sr_serial_extract_options(options, &conn, &serialcomm) != SR_OK)
         return NULL;
@@ -80,10 +85,27 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     }
  
     /* Try to communicate with the device to verify it's there */
-    /* Send ping and expect pong */
-    const char *ping_cmd = "ping\r\n";
-    char pong_reply[128] = {0};
-	printf(" - strlen(ping_cmd)=%d\n", strlen(ping_cmd));
+    /* Drain any initial bytes (banner/garbage) that might be pending. */
+    {
+        char drain_buf[128];
+        int drained_total = 0;
+        while (1) {
+            int r = serial_read_blocking(serial, drain_buf, sizeof(drain_buf), 50);
+            if (r > 0) {
+                drained_total += r;
+                continue;
+            }
+            /* Stop on timeout or error; it's fine if nothing was there. */
+            break;
+        }
+        if (drained_total > 0)
+            printf(" - flushed %d stale byte(s) before ping.\n", drained_total);
+    }
+    /* Send ping and expect pong (device may echo input or include CR/LF) */
+    const char *ping_cmd = "ping\r";
+    char accum[256] = {0};
+    size_t accum_len = 0;
+    printf(" - strlen(ping_cmd)=%d\n", (int)strlen(ping_cmd));
     int write_ret = serial_write_blocking(serial, ping_cmd, strlen(ping_cmd), 1000);
     if (write_ret < 0) {
         printf(" - failed to send ping to device.\n");
@@ -91,19 +113,44 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
-	
-	printf(" - sizeof(pong_reply)-1=%d\n", sizeof(pong_reply)-1);
-    int read_ret = serial_read_blocking(serial, pong_reply, sizeof(pong_reply)-1, 2000);
-	printf(" - read_ret = %d\n", read_ret);
-    if (read_ret < 0) {
-        printf(" - failed to read pong from device.\n");
-        serial_close(serial);
-        sr_serial_dev_inst_free(serial);
-        return NULL;
+
+    /* Read in chunks up to an overall timeout, and search for substring "pong". */
+    int overall_timeout_ms = 2000;
+    int chunk_timeout_ms = 200; /* smaller per-read timeout to accumulate */
+    int waited_ms = 0;
+    int found = 0;
+    while (waited_ms < overall_timeout_ms && accum_len < sizeof(accum) - 1) {
+        int to_read = (int)(sizeof(accum) - 1 - accum_len);
+        int read_ret = serial_read_blocking(serial, accum + accum_len, to_read, chunk_timeout_ms);
+        if (read_ret > 0) {
+            accum_len += (size_t)read_ret;
+            accum[accum_len] = '\0';
+            if (strstr(accum, "pong") != NULL) {
+                found = 1;
+                break;
+            }
+            /* Continue reading until timeout or found. */
+            continue;
+        } else if (read_ret == 0 || read_ret == SR_ERR_TIMEOUT) {
+            waited_ms += chunk_timeout_ms;
+            continue;
+        } else { /* read error */
+            printf(" - failed to read pong from device (err=%d).\n", read_ret);
+            serial_close(serial);
+            sr_serial_dev_inst_free(serial);
+            return NULL;
+        }
     }
-    pong_reply[read_ret] = '\0';
-    if (strncmp(pong_reply, "pong", 4) != 0) {
-        printf(" - device did not reply pong, got: '%s', %x\n", pong_reply, pong_reply[0]);
+
+    if (!found) {
+        /* Print a short hex dump of what we actually received for debugging. */
+        printf(" - device did not reply pong. Received %zu bytes:\n  ", accum_len);
+        for (size_t i = 0; i < accum_len && i < 64; i++) {
+            printf("%02X ", (unsigned char)accum[i]);
+        }
+        if (accum_len > 64)
+            printf("... ");
+        printf("\n  as text: '%.*s'\n", (int)accum_len, accum);
         serial_close(serial);
         sr_serial_dev_inst_free(serial);
         return NULL;
@@ -112,26 +159,33 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
 	printf("found device on %s\n", conn);
     /* Create device instance */
     sdi = g_malloc0(sizeof(struct sr_dev_inst));
-    sdi->status = SR_ST_INACTIVE;
+    sdi->driver = di;
+    sdi->status = SR_ST_INACTIVE; /* scanned devices are inactive */
     sdi->vendor = g_strdup("Quantr");
     sdi->model = g_strdup("Device");
     sdi->inst_type = SR_INST_SERIAL;
     sdi->conn = serial;
-     printf("a\n");
+    sdi->connection_id = g_strdup(conn);
     if (!sdi) {
         serial_close(serial);
         sr_serial_dev_inst_free(serial);
         return NULL;
     }
  
-    printf("3\n");
     devc = g_malloc0(sizeof(struct dev_context));
     devc->serial = serial;
     devc->samplerate = 1000000; /* Default 1MHz */
-    devc->num_channels = 8; /* Default 8 channels */
+    devc->num_channels = 16; /* STM32 logic analyzer with 16 channels */
     devc->buffer_size = 4096;
     devc->buffer = g_malloc(devc->buffer_size);
+    devc->continuous = FALSE;
     sdi->priv = devc;
+    /* Create logic channels CH0..CH15 enabled by default. */
+    for (int i = 0; i < devc->num_channels; i++) {
+        char name[8];
+        g_snprintf(name, sizeof(name), "CH%d", i);
+        sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
+    }
      
     serial_close(serial);
     devices = g_slist_append(devices, sdi);
@@ -142,18 +196,21 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
 /* List devices */
 SR_PRIV GSList *quantr_dev_list(const struct sr_dev_driver *di)
 {
+	printf("quantr_dev_list\n");
     return ((struct sr_dev_driver *)di)->context;
 }
  
 /* Clear device instances */
 SR_PRIV int quantr_dev_clear(const struct sr_dev_driver *di)
 {
+	printf("quantr_dev_clear\n");
     return std_dev_clear(di);
 }
  
 /* Get configuration */
 SR_PRIV int quantr_config_get(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	printf("quantr_config_get\n");
     struct dev_context *devc = sdi->priv;
  
     (void)cg;
@@ -161,6 +218,9 @@ SR_PRIV int quantr_config_get(uint32_t key, GVariant **data, const struct sr_dev
     switch (key) {
     case SR_CONF_SAMPLERATE:
         *data = g_variant_new_uint64(devc->samplerate);
+        return SR_OK;
+    case SR_CONF_CONTINUOUS:
+        *data = g_variant_new_boolean(devc->continuous);
         return SR_OK;
     default:
         return SR_ERR_NA;
@@ -170,6 +230,7 @@ SR_PRIV int quantr_config_get(uint32_t key, GVariant **data, const struct sr_dev
 /* Set configuration */
 SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	printf("quantr_config_set\n");
     struct dev_context *devc = sdi->priv;
  
     (void)cg;
@@ -181,6 +242,9 @@ SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_
     case SR_CONF_SAMPLERATE:
         devc->samplerate = g_variant_get_uint64(data);
         return SR_OK;
+    case SR_CONF_CONTINUOUS:
+        devc->continuous = g_variant_get_boolean(data);
+        return SR_OK;
     default:
         return SR_ERR_NA;
     }
@@ -189,6 +253,7 @@ SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_
 /* List configuration options */
 SR_PRIV int quantr_config_list(uint32_t key, GVariant **data, const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
+	printf("quantr_config_list\n");
     (void)sdi;
     (void)cg;
  
@@ -213,6 +278,7 @@ SR_PRIV int quantr_config_list(uint32_t key, GVariant **data, const struct sr_de
 /* Open device */
 SR_PRIV int quantr_dev_open(struct sr_dev_inst *sdi)
 {
+	printf("quantr_dev_open\n");
     struct dev_context *devc = sdi->priv;
     int ret;
  
@@ -227,6 +293,7 @@ SR_PRIV int quantr_dev_open(struct sr_dev_inst *sdi)
 /* Close device */
 SR_PRIV int quantr_dev_close(struct sr_dev_inst *sdi)
 {
+	printf("quantr_dev_close\n");
     struct dev_context *devc = sdi->priv;
  
     if (devc->serial) {
@@ -239,6 +306,7 @@ SR_PRIV int quantr_dev_close(struct sr_dev_inst *sdi)
 /* Start acquisition */
 SR_PRIV int quantr_dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
+	printf("quantr_dev_acquisition_start\n");
     struct dev_context *devc = sdi->priv;
     int ret;
  
@@ -246,7 +314,7 @@ SR_PRIV int quantr_dev_acquisition_start(const struct sr_dev_inst *sdi)
         return SR_ERR;
  
     /* Send start command to device via serial port */
-    ret = serial_write_blocking(devc->serial, "START\n", 6, 1000);
+    ret = serial_write_blocking(devc->serial, "START\r", 6, 1000);
     if (ret < 0)
         return SR_ERR;
  
@@ -261,6 +329,7 @@ SR_PRIV int quantr_dev_acquisition_start(const struct sr_dev_inst *sdi)
 /* Stop acquisition */
 SR_PRIV int quantr_dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
+	printf("quantr_dev_acquisition_stop\n");
     struct dev_context *devc = sdi->priv;
     int ret;
  
@@ -268,7 +337,7 @@ SR_PRIV int quantr_dev_acquisition_stop(struct sr_dev_inst *sdi)
         return SR_OK;
  
     /* Send stop command to device via serial port */
-    ret = serial_write_blocking(devc->serial, "STOP\n", 5, 1000);
+    ret = serial_write_blocking(devc->serial, "STOP\r", 5, 1000);
     if (ret < 0)
         return SR_ERR;
  

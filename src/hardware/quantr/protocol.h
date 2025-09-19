@@ -13,6 +13,7 @@ struct dev_context {
     uint8_t *buffer;
     size_t buffer_size;
     int acquisition_running;
+    gboolean continuous;
 };
  
 /* Function prototypes */
