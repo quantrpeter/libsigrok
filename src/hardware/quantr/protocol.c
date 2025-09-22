@@ -60,11 +60,14 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     conn = NULL;
     serialcomm = "115200/8n1/dtr=1/rts=1"; /* Default serial settings with DTR/RTS asserted */
      
-    if (sr_serial_extract_options(options, &conn, &serialcomm) != SR_OK)
+    if (sr_serial_extract_options(options, &conn, &serialcomm) != SR_OK){
+		printf(" - sr_serial_extract_options is failed\n");
         return NULL;
+	}
  
-    if (!conn)
+    if (!conn){
         return NULL;
+	}
 
 	printf(" - connecting to %s, %s\n", conn, serialcomm);
  
@@ -179,6 +182,9 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     devc->buffer_size = 4096;
     devc->buffer = g_malloc(devc->buffer_size);
     devc->continuous = FALSE;
+    devc->acquisition_running = 0;
+    devc->line_pos = 0;
+    devc->acquisition_started = FALSE;
     sdi->priv = devc;
     /* Create logic channels CH0..CH15 enabled by default. */
     for (int i = 0; i < devc->num_channels; i++) {
@@ -283,8 +289,10 @@ SR_PRIV int quantr_dev_open(struct sr_dev_inst *sdi)
     int ret;
  
     ret = serial_open(devc->serial, SERIAL_RDWR);
-    if (ret != SR_OK)
+    if (ret != SR_OK){
+		printf(" - serial_open failed\n");
         return ret;
+	}
  
     sdi->status = SR_ST_ACTIVE;
     return SR_OK;
@@ -313,17 +321,21 @@ SR_PRIV int quantr_dev_acquisition_start(const struct sr_dev_inst *sdi)
     if (!devc->serial)
         return SR_ERR;
  
+    /* Initialize parsing state */
+    devc->line_pos = 0;
+    devc->acquisition_started = FALSE;
+    
     /* Send start command to device via serial port */
-    ret = serial_write_blocking(devc->serial, "START\r", 6, 1000);
+    ret = serial_write_blocking(devc->serial, "start\r", 6, 1000);
     if (ret < 0)
         return SR_ERR;
  
     devc->acquisition_running = 1;
      
-    /* Set up polling or event-driven data reading here */
-    /* For now, this is just a skeleton */
-     
-    return SR_OK;
+    /* Set up polling mechanism to check for incoming data */
+    /* This will call quantr_receive_data whenever data is available */
+    return serial_source_add(sdi->session, devc->serial, G_IO_IN, 100,
+                            quantr_receive_data, (void *)sdi);
 }
  
 /* Stop acquisition */
@@ -336,11 +348,140 @@ SR_PRIV int quantr_dev_acquisition_stop(struct sr_dev_inst *sdi)
     if (!devc->serial || !devc->acquisition_running)
         return SR_OK;
  
+    /* Remove the serial source from polling */
+    serial_source_remove(sdi->session, devc->serial);
+    
     /* Send stop command to device via serial port */
-    ret = serial_write_blocking(devc->serial, "STOP\r", 5, 1000);
+    ret = serial_write_blocking(devc->serial, "stop\r", 5, 1000);
     if (ret < 0)
         return SR_ERR;
  
+    /* Send end packet if acquisition was running and started */
+    if (devc->acquisition_started) {
+        std_session_send_df_end(sdi);
+    }
+    
     devc->acquisition_running = 0;
+    devc->acquisition_started = FALSE;
+    devc->line_pos = 0;
+    
     return SR_OK;
+}
+
+/* Process a complete line from the STM32 */
+static int process_line(struct sr_dev_inst *sdi, const char *line)
+{
+    struct dev_context *devc = sdi->priv;
+    struct sr_datafeed_packet packet;
+    struct sr_datafeed_logic logic;
+    uint32_t timestamp;
+    uint32_t data_bytes[4];
+    uint8_t sample_data[4];
+    int i;
+    
+    printf("Processing line: '%s'\n", line);
+    
+    /* Check for control messages */
+    if (strcmp(line, "started") == 0) {
+        printf("Device started acquisition\n");
+        devc->acquisition_started = TRUE;
+        std_session_send_df_header(sdi);
+        return SR_OK;
+    }
+    
+    if (strcmp(line, "end") == 0) {
+        printf("Device finished acquisition\n");
+        std_session_send_df_end(sdi);
+        devc->acquisition_running = 0;
+        devc->acquisition_started = FALSE;
+        return SR_OK;
+    }
+    
+    /* Skip processing data lines if acquisition hasn't officially started */
+    if (!devc->acquisition_started) {
+        return SR_OK;
+    }
+    
+    /* Parse data line: "102368 > 0x00 0x30 0x00 0x00" */
+    if (sscanf(line, "%u > 0x%02x 0x%02x 0x%02x 0x%02x", 
+               &timestamp, &data_bytes[0], &data_bytes[1], &data_bytes[2], &data_bytes[3]) == 5) {
+        
+        /* Convert to byte array */
+        for (i = 0; i < 4; i++) {
+            sample_data[i] = (uint8_t)data_bytes[i];
+        }
+        
+        printf("Parsed sample: timestamp=%u, data=0x%02x 0x%02x 0x%02x 0x%02x\n", 
+               timestamp, sample_data[0], sample_data[1], sample_data[2], sample_data[3]);
+        
+        /* Send logic data packet */
+        packet.type = SR_DF_LOGIC;
+        packet.payload = &logic;
+        logic.length = 4;  /* 4 bytes per sample (32-bit GPIO register) */
+        logic.unitsize = 4;  /* Each sample is 4 bytes */
+        logic.data = sample_data;
+        
+        sr_session_send(sdi, &packet);
+        return SR_OK;
+    }
+    
+    /* If we get here, the line format wasn't recognized */
+    printf("Unrecognized line format: '%s'\n", line);
+    return SR_OK;
+}
+
+/* Receive data callback - called when data is available on serial port */
+SR_PRIV int quantr_receive_data(int fd, int revents, void *cb_data)
+{
+    struct sr_dev_inst *sdi;
+    struct dev_context *devc;
+    uint8_t buffer[256];
+    int len, i;
+    
+    (void)fd;
+    (void)revents;
+    
+    if (!(sdi = cb_data))
+        return TRUE;
+        
+    if (!(devc = sdi->priv))
+        return TRUE;
+        
+    if (!devc->acquisition_running)
+        return FALSE;  /* Stop polling */
+    
+    /* Read available data from serial port */
+    len = serial_read_nonblocking(devc->serial, buffer, sizeof(buffer) - 1);
+    if (len <= 0)
+        return TRUE;  /* Continue polling, no data available */
+    
+    buffer[len] = '\0';  /* Null terminate for safety */
+    printf("Received %d bytes: '%.*s'\n", len, len, buffer);
+    
+    /* Process each character to build complete lines */
+    for (i = 0; i < len; i++) {
+        char c = buffer[i];
+        
+        /* Handle line endings */
+        if (c == '\r' || c == '\n') {
+            if (devc->line_pos > 0) {
+                /* We have a complete line */
+                devc->line_buffer[devc->line_pos] = '\0';
+                process_line(sdi, devc->line_buffer);
+                devc->line_pos = 0;  /* Reset for next line */
+            }
+            /* Skip empty lines (handles CRLF) */
+        } else {
+            /* Accumulate line characters */
+            if (devc->line_pos < sizeof(devc->line_buffer) - 1) {
+                devc->line_buffer[devc->line_pos++] = c;
+            } else {
+                /* Line too long, reset */
+                printf("Line too long, resetting buffer\n");
+                devc->line_pos = 0;
+            }
+        }
+    }
+    
+    return TRUE;  /* Continue polling */
 }

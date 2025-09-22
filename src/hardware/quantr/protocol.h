@@ -14,6 +14,11 @@ struct dev_context {
     size_t buffer_size;
     int acquisition_running;
     gboolean continuous;
+    
+    /* Line parsing state */
+    char line_buffer[256];
+    size_t line_pos;
+    gboolean acquisition_started;
 };
  
 /* Function prototypes */
@@ -29,5 +34,6 @@ SR_PRIV int quantr_dev_open(struct sr_dev_inst *sdi);
 SR_PRIV int quantr_dev_close(struct sr_dev_inst *sdi);
 SR_PRIV int quantr_dev_acquisition_start(const struct sr_dev_inst *sdi);
 SR_PRIV int quantr_dev_acquisition_stop(struct sr_dev_inst *sdi);
+SR_PRIV int quantr_receive_data(int fd, int revents, void *cb_data);
  
 #endif
