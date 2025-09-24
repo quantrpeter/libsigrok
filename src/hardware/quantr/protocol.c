@@ -58,7 +58,7 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
  
     /* Parse options */
     conn = NULL;
-    serialcomm = "115200/8n1/dtr=1/rts=1"; /* Default serial settings with DTR/RTS asserted */
+    serialcomm = "921600/8n1/dtr=1/rts=1"; /* Default serial settings with DTR/RTS asserted */
      
     if (sr_serial_extract_options(options, &conn, &serialcomm) != SR_OK){
 		printf(" - sr_serial_extract_options is failed\n");
