@@ -9,6 +9,8 @@
 struct dev_context {
     struct sr_serial_dev_inst *serial;
     uint64_t samplerate;
+    uint64_t limit_samples;
+    uint64_t samples_collected;
     int num_channels;
     uint8_t *buffer;
     size_t buffer_size;

@@ -2,6 +2,7 @@
 #include <config.h>
 #include <stdlib.h>
 #include <string.h>
+#include <inttypes.h>
 #include <libsigrok/libsigrok.h>
 #include "libsigrok-internal.h"
  
@@ -15,6 +16,7 @@ static const uint32_t scanopts[] = {
 static const uint32_t devopts[] = {
     SR_CONF_LOGIC_ANALYZER,
     SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
+    SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
     SR_CONF_CONTINUOUS | SR_CONF_GET | SR_CONF_SET,
 };
  
@@ -178,6 +180,8 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     devc = g_malloc0(sizeof(struct dev_context));
     devc->serial = serial;
     devc->samplerate = 1000000; /* Default 1MHz */
+    devc->limit_samples = 10000; /* Default 10k samples */
+    devc->samples_collected = 0;
     devc->num_channels = 16; /* STM32 logic analyzer with 16 channels */
     devc->buffer_size = 4096;
     devc->buffer = g_malloc(devc->buffer_size);
@@ -225,6 +229,9 @@ SR_PRIV int quantr_config_get(uint32_t key, GVariant **data, const struct sr_dev
     case SR_CONF_SAMPLERATE:
         *data = g_variant_new_uint64(devc->samplerate);
         return SR_OK;
+    case SR_CONF_LIMIT_SAMPLES:
+        *data = g_variant_new_uint64(devc->limit_samples);
+        return SR_OK;
     case SR_CONF_CONTINUOUS:
         *data = g_variant_new_boolean(devc->continuous);
         return SR_OK;
@@ -238,6 +245,7 @@ SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_
 {
 	printf("quantr_config_set\n");
     struct dev_context *devc = sdi->priv;
+    int ret;
  
     (void)cg;
  
@@ -247,7 +255,32 @@ SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_
     switch (key) {
     case SR_CONF_SAMPLERATE:
         devc->samplerate = g_variant_get_uint64(data);
+        
+        /* Send new sampling rate to device */
+        char rate_cmd[64];
+        snprintf(rate_cmd, sizeof(rate_cmd), "rate %"PRIu64"\r", devc->samplerate);
+        ret = serial_write_blocking(devc->serial, rate_cmd, strlen(rate_cmd), 1000);
+        if (ret < 0) {
+            printf("Failed to send sampling rate configuration to device\n");
+            return SR_ERR;
+        }
+        printf("Updated sampling rate to: %"PRIu64" Hz\n", devc->samplerate);
         return SR_OK;
+        
+    case SR_CONF_LIMIT_SAMPLES:
+        devc->limit_samples = g_variant_get_uint64(data);
+        
+        /* Send new sample limit to device */
+        char samples_cmd[64];
+        snprintf(samples_cmd, sizeof(samples_cmd), "samples %"PRIu64"\r", devc->limit_samples);
+        ret = serial_write_blocking(devc->serial, samples_cmd, strlen(samples_cmd), 1000);
+        if (ret < 0) {
+            printf("Failed to send sample limit configuration to device\n");
+            return SR_ERR;
+        }
+        printf("Updated sample limit to: %"PRIu64" samples\n", devc->limit_samples);
+        return SR_OK;
+        
     case SR_CONF_CONTINUOUS:
         devc->continuous = g_variant_get_boolean(data);
         return SR_OK;
@@ -276,6 +309,10 @@ SR_PRIV int quantr_config_list(uint32_t key, GVariant **data, const struct sr_de
         *data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT64,
                 samplerates, ARRAY_SIZE(samplerates), sizeof(uint64_t));
         return SR_OK;
+    case SR_CONF_LIMIT_SAMPLES:
+        /* Allow from 1 sample to 1 million samples */
+        *data = std_gvar_tuple_u64(1, 1000000);
+        return SR_OK;
     default:
         return SR_ERR_NA;
     }
@@ -293,6 +330,17 @@ SR_PRIV int quantr_dev_open(struct sr_dev_inst *sdi)
 		printf(" - serial_open failed\n");
         return ret;
 	}
+    
+    /* Send initial sampling rate configuration */
+    char rate_cmd[64];
+    snprintf(rate_cmd, sizeof(rate_cmd), "rate %"PRIu64"\r", devc->samplerate);
+    ret = serial_write_blocking(devc->serial, rate_cmd, strlen(rate_cmd), 1000);
+    if (ret < 0) {
+        printf("Failed to send initial sampling rate configuration\n");
+        /* Don't fail device open for this, just log it */
+    } else {
+        printf("Configured sampling rate: %"PRIu64" Hz\n", devc->samplerate);
+    }
  
     sdi->status = SR_ST_ACTIVE;
     return SR_OK;
@@ -324,6 +372,40 @@ SR_PRIV int quantr_dev_acquisition_start(const struct sr_dev_inst *sdi)
     /* Initialize parsing state */
     devc->line_pos = 0;
     devc->acquisition_started = FALSE;
+    devc->samples_collected = 0;
+    
+    /* Send sampling rate configuration to device */
+    char rate_cmd[64];
+    snprintf(rate_cmd, sizeof(rate_cmd), "rate %"PRIu64"\r", devc->samplerate);
+    ret = serial_write_blocking(devc->serial, rate_cmd, strlen(rate_cmd), 1000);
+    if (ret < 0) {
+        printf("Failed to send sampling rate configuration\n");
+        return SR_ERR;
+    }
+    
+    /* Wait for acknowledgment */
+    char ack_buffer[128];
+    ret = serial_read_blocking(devc->serial, ack_buffer, sizeof(ack_buffer) - 1, 1000);
+    if (ret > 0) {
+        ack_buffer[ret] = '\0';
+        printf("Rate config response: '%s'\n", ack_buffer);
+    }
+    
+    /* Send sample limit configuration to device */
+    char samples_cmd[64];
+    snprintf(samples_cmd, sizeof(samples_cmd), "samples %"PRIu64"\r", devc->limit_samples);
+    ret = serial_write_blocking(devc->serial, samples_cmd, strlen(samples_cmd), 1000);
+    if (ret < 0) {
+        printf("Failed to send sample limit configuration\n");
+        return SR_ERR;
+    }
+    
+    /* Wait for acknowledgment */
+    ret = serial_read_blocking(devc->serial, ack_buffer, sizeof(ack_buffer) - 1, 1000);
+    if (ret > 0) {
+        ack_buffer[ret] = '\0';
+        printf("Sample limit config response: '%s'\n", ack_buffer);
+    }
     
     /* Send start command to device via serial port */
     ret = serial_write_blocking(devc->serial, "start\r", 6, 1000);
@@ -422,6 +504,14 @@ static int process_line(struct sr_dev_inst *sdi, const char *line)
         logic.data = sample_data;
         
         sr_session_send(sdi, &packet);
+        
+        /* Increment sample counter and check limit */
+        devc->samples_collected++;
+        if (!devc->continuous && devc->samples_collected >= devc->limit_samples) {
+            printf("Reached sample limit (%"PRIu64" samples), stopping acquisition\n", devc->limit_samples);
+            quantr_dev_acquisition_stop(sdi);
+        }
+        
         return SR_OK;
     }
     
