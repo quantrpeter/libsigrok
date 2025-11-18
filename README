@@ -38,7 +38,7 @@ Requirements for the C library:
  - pkg-config >= 0.22
  - libglib >= 2.32.0
  - zlib (optional, used for CRC32 calculation in STF input)
- - libzip >= 0.10
+ - libzip >= 0.11
  - libtirpc (optional, used by VXI, fallback when glibc >= 2.26)
  - libserialport >= 0.1.1 (optional, used by some drivers)
  - librevisa >= 0.0.20130412 (optional, used by some drivers)
