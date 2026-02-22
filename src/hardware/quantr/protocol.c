@@ -208,7 +208,7 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     devc->samplerate = 1000000; /* Default 1MHz */
     devc->limit_samples = 10000; /* Default 10k samples */
     devc->samples_collected = 0;
-    devc->num_channels = 16; /* STM32 logic analyzer with 16 channels */
+    devc->num_channels = 64; /* 64 channels: PA0-15, PB0-15, PC0-15, PD0-15 */
     devc->buffer_size = 4096;
     devc->buffer = g_malloc(devc->buffer_size);
     devc->continuous = FALSE;
@@ -574,8 +574,8 @@ static int process_line(struct sr_dev_inst *sdi, const char *line)
     struct sr_datafeed_packet packet;
     struct sr_datafeed_logic logic;
     uint32_t timestamp;
-    uint32_t data_bytes[4];
-    uint8_t sample_data[4];
+    uint32_t data_bytes[8];
+    uint8_t sample_data[8];
     int i;
     
     #ifdef DEBUG
@@ -607,25 +607,40 @@ static int process_line(struct sr_dev_inst *sdi, const char *line)
         return SR_OK;
     }
     
-    /* Parse data line: "102368 > 0x00 0x30 0x00 0x00" */
-    if (sscanf(line, "%u > 0x%02x 0x%02x 0x%02x 0x%02x", 
-               &timestamp, &data_bytes[0], &data_bytes[1], &data_bytes[2], &data_bytes[3]) == 5) {
+    /* Parse data line: "0 > 0xAA 0xBB 0xCC 0xDD 0xEE 0xFF 0x11 0x22"
+     * bytes 0-1: GPIOA (PA0-PA15)
+     * bytes 2-3: GPIOB (PB0-PB15)
+     * bytes 4-5: GPIOC (PC0-PC15)
+     * bytes 6-7: GPIOD (PD0-PD15)
+     */
+    if (sscanf(line, "%u > 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x 0x%02x",
+               &timestamp,
+               &data_bytes[0], &data_bytes[1], &data_bytes[2], &data_bytes[3],
+               &data_bytes[4], &data_bytes[5], &data_bytes[6], &data_bytes[7]) == 9) {
         
         /* Convert to byte array */
-        for (i = 0; i < 4; i++) {
+        for (i = 0; i < 8; i++) {
             sample_data[i] = (uint8_t)data_bytes[i];
         }
         
         #ifdef DEBUG
-        printf("Parsed sample %"PRIu64": timestamp=%u, data=0x%02x 0x%02x 0x%02x 0x%02x\n", 
-               devc->samples_collected + 1, timestamp, sample_data[0], sample_data[1], sample_data[2], sample_data[3]);
+        printf("Parsed sample %"PRIu64": timestamp=%u, "
+               "A=0x%02x%02x B=0x%02x%02x C=0x%02x%02x D=0x%02x%02x\n",
+               devc->samples_collected + 1, timestamp,
+               sample_data[1], sample_data[0],
+               sample_data[3], sample_data[2],
+               sample_data[5], sample_data[4],
+               sample_data[7], sample_data[6]);
         #endif
         
-        /* Send logic data packet */
+        /* Send logic data packet:
+         * unitsize = 8 bytes (64 channels: PA0-15, PB0-15, PC0-15, PD0-15)
+         * length   = 8 bytes (one sample)
+         */
         packet.type = SR_DF_LOGIC;
         packet.payload = &logic;
-        logic.length = 4;  /* 4 bytes per sample (32-bit GPIO register) */
-        logic.unitsize = 4;  /* Each sample is 4 bytes */
+        logic.length = 8;
+        logic.unitsize = 8;
         logic.data = sample_data;
         
         sr_session_send(sdi, &packet);
