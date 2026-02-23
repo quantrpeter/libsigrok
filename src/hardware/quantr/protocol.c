@@ -36,6 +36,10 @@ static const uint64_t samplerates[] = {
     SR_KHZ(200),
     SR_KHZ(250),
     SR_KHZ(500),
+    SR_MHZ(1),
+    SR_MHZ(2),
+    SR_MHZ(4),
+    SR_MHZ(5),
 };
  
 /* Initialize the driver */
