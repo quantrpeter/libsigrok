@@ -22,14 +22,20 @@ static const uint32_t devopts[] = {
 };
  
 static const uint64_t samplerates[] = {
+	SR_HZ(1),
+	SR_HZ(100),
+	SR_HZ(200),
+	SR_HZ(250),
+	SR_HZ(500),
     SR_KHZ(1),
     SR_KHZ(10),
+    SR_KHZ(20),
+    SR_KHZ(25),
+    SR_KHZ(50),
     SR_KHZ(100),
-    SR_MHZ(1),
-    SR_MHZ(10),
-    SR_MHZ(20),
-    SR_MHZ(25),
-    SR_MHZ(50),
+    SR_KHZ(200),
+    SR_KHZ(250),
+    SR_KHZ(500),
 };
  
 /* Initialize the driver */
@@ -296,37 +302,31 @@ SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_
     #endif
  
     (void)cg;
- 
-    if (sdi->status != SR_ST_ACTIVE) {
-        #ifdef DEBUG
-        printf("  -> Device not active (status=%d), returning SR_ERR_DEV_CLOSED\n", sdi->status);
-        #endif
-        return SR_ERR_DEV_CLOSED;
-    }
- 
+
     switch (key) {
     case SR_CONF_SAMPLERATE:
         devc->samplerate = g_variant_get_uint64(data);
         #ifdef DEBUG
         printf("  -> SR_CONF_SAMPLERATE: setting to %"PRIu64" Hz\n", devc->samplerate);
         #endif
-        
         /* Send new sampling rate to device */
-        char rate_cmd[64];
-        snprintf(rate_cmd, sizeof(rate_cmd), "rate %"PRIu64"\r", devc->samplerate);
-        #ifdef DEBUG
-        printf("  -> Sending command: '%s'\n", rate_cmd);
-        #endif
-        ret = serial_write_blocking(devc->serial, rate_cmd, strlen(rate_cmd), 1000);
-        if (ret < 0) {
+        if (sdi->status == SR_ST_ACTIVE) {
+            char rate_cmd[64];
+            snprintf(rate_cmd, sizeof(rate_cmd), "rate %"PRIu64"\r", devc->samplerate);
             #ifdef DEBUG
-            printf("  -> Failed to send sampling rate configuration to device (ret=%d)\n", ret);
+            printf("  -> Sending command: '%s'\n", rate_cmd);
             #endif
-            return SR_ERR;
+            ret = serial_write_blocking(devc->serial, rate_cmd, strlen(rate_cmd), 1000);
+            if (ret < 0) {
+                #ifdef DEBUG
+                printf("  -> Failed to send sampling rate configuration to device (ret=%d)\n", ret);
+                #endif
+                return SR_ERR;
+            }
+            #ifdef DEBUG
+            printf("  -> Successfully updated sampling rate to: %"PRIu64" Hz\n", devc->samplerate);
+            #endif
         }
-        #ifdef DEBUG
-        printf("  -> Successfully updated sampling rate to: %"PRIu64" Hz\n", devc->samplerate);
-        #endif
         return SR_OK;
         
     case SR_CONF_LIMIT_SAMPLES:
@@ -334,23 +334,24 @@ SR_PRIV int quantr_config_set(uint32_t key, GVariant *data, const struct sr_dev_
         #ifdef DEBUG
         printf("  -> SR_CONF_LIMIT_SAMPLES: setting to %"PRIu64" samples\n", devc->limit_samples);
         #endif
-        
         /* Send new sample limit to device */
-        char samples_cmd[64];
-        snprintf(samples_cmd, sizeof(samples_cmd), "samples %"PRIu64"\r", devc->limit_samples);
-        #ifdef DEBUG
-        printf("  -> Sending command: '%s'\n", samples_cmd);
-        #endif
-        ret = serial_write_blocking(devc->serial, samples_cmd, strlen(samples_cmd), 1000);
-        if (ret < 0) {
+        if (sdi->status == SR_ST_ACTIVE) {
+            char samples_cmd[64];
+            snprintf(samples_cmd, sizeof(samples_cmd), "samples %"PRIu64"\r", devc->limit_samples);
             #ifdef DEBUG
-            printf("  -> Failed to send sample limit configuration to device (ret=%d)\n", ret);
+            printf("  -> Sending command: '%s'\n", samples_cmd);
             #endif
-            return SR_ERR;
+            ret = serial_write_blocking(devc->serial, samples_cmd, strlen(samples_cmd), 1000);
+            if (ret < 0) {
+                #ifdef DEBUG
+                printf("  -> Failed to send sample limit configuration to device (ret=%d)\n", ret);
+                #endif
+                return SR_ERR;
+            }
+            #ifdef DEBUG
+            printf("  -> Successfully updated sample limit to: %"PRIu64" samples\n", devc->limit_samples);
+            #endif
         }
-        #ifdef DEBUG
-        printf("  -> Successfully updated sample limit to: %"PRIu64" samples\n", devc->limit_samples);
-        #endif
         return SR_OK;
         
     case SR_CONF_CONTINUOUS:
@@ -395,8 +396,7 @@ SR_PRIV int quantr_config_list(uint32_t key, GVariant **data, const struct sr_de
         #ifdef DEBUG
         printf("  -> SR_CONF_SAMPLERATE: returning samplerates array\n");
         #endif
-        *data = g_variant_new_fixed_array(G_VARIANT_TYPE_UINT64,
-                samplerates, ARRAY_SIZE(samplerates), sizeof(uint64_t));
+        *data = std_gvar_samplerates(samplerates, ARRAY_SIZE(samplerates));
         return SR_OK;
     case SR_CONF_LIMIT_SAMPLES:
         #ifdef DEBUG
