@@ -226,13 +226,26 @@ SR_PRIV GSList *quantr_scan(struct sr_dev_driver *di, GSList *options)
     devc->line_pos = 0;
     devc->acquisition_started = FALSE;
     sdi->priv = devc;
-    /* Create logic channels CH0..CH15 enabled by default. */
+    /* Create logic channels CH0..CH63 enabled by default. */
     for (int i = 0; i < devc->num_channels; i++) {
         char name[8];
         g_snprintf(name, sizeof(name), "CH%d", i);
         sr_channel_new(sdi, i, SR_CHANNEL_LOGIC, TRUE, name);
     }
-     
+
+    /* Create channel groups: 8 groups of 8 channels each. */
+    static const char *group_names[] = {
+        "PA0-7", "PA8-15", "PB0-7", "PB8-15",
+        "PC0-7", "PC8-15", "PD0-7", "PD8-15"
+    };
+    for (int g = 0; g < 8; g++) {
+        struct sr_channel_group *cg = sr_channel_group_new(sdi, group_names[g], NULL);
+        for (int c = 0; c < 8; c++) {
+            struct sr_channel *ch = g_slist_nth_data(sdi->channels, g * 8 + c);
+            cg->channels = g_slist_append(cg->channels, ch);
+        }
+    }
+
     serial_close(serial);
     devices = g_slist_append(devices, sdi);
     #ifdef DEBUG
