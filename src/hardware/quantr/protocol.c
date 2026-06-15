@@ -40,6 +40,10 @@ static const uint64_t samplerates[] = {
     SR_MHZ(2),
     SR_MHZ(4),
     SR_MHZ(5),
+    SR_MHZ(10),
+    SR_MHZ(20),
+    SR_MHZ(40),
+    SR_MHZ(50),
 };
  
 /* Initialize the driver */
